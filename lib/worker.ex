@@ -1,26 +1,75 @@
 
 defmodule Metex.Worker do
 
-  def loop do
+  use GenServer
 
-    receive do
-      {sender_pid, location} ->
-        send(sender_pid, {:ok, temperature_of(location)})
+  @name MW
 
-      _ -> IO.puts "What do with this silly message?"
-    end
-
-    loop()
+  ## Client API
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, :ok, opts ++ [name: MW])
   end
 
-  def temperature_of(location) do
+  def get_temperature(location) do
+    GenServer.call(@name, {:location, location})
+  end
 
-    result = url_for(location) |> HTTPoison.get |> parse_response
+  def get_stats do
+    GenServer.call(@name, :get_stats)
+  end
 
-    case result do
-      {:ok, temp} -> "#{location}: #{temp} C"
-      :error -> "#{location} not found"
+  def reset_stats do
+    GenServer.cast(@name, :reset_stats)
+  end
+
+  def stop do
+    GenServer.cast(@name, :stop)
+  end
+
+  ## Server API
+  def handle_call({:location, location}, _from, stats) do
+    case temperature_of(location) do
+      {:ok, temp} ->
+        new_stats = update_stats(stats, location)
+        {:reply, "#{temp} C", new_stats}
+      _ -> {:reply, :error, stats}
     end
+  end
+
+  def handle_call(:get_stats, _from, stats) do
+    {:reply, stats, stats}
+  end
+
+  def handle_cast(:reset_stats, _stats) do
+    {:noreply, %{}}
+  end
+
+  def handle_cast(:stop, stats) do
+    {:stop, :normal, stats}
+  end
+
+  def handle_info(message, stats) do
+    IO.puts "Received #{inspect message}"
+    {:noreply, stats}
+  end
+
+  ## Server callbacks
+  def init(:ok) do
+    {:ok, %{}}
+  end
+
+  def terminate(reason, stats) do
+    #Persist stats, print, etc
+    IO.puts("server terminated because of #{reason}")
+    IO.inspect stats
+    :ok
+  end
+
+  ## Helper functions
+
+  defp temperature_of(location) do
+
+    url_for(location) |> HTTPoison.get |> parse_response
   end
 
   defp url_for(location) do
@@ -49,5 +98,14 @@ defmodule Metex.Worker do
   defp apikey do
 
     System.get_env("OWM_API_KEY")
+  end
+
+  defp update_stats(old_stats, location) do
+    case Map.has_key?(old_stats,location) do
+      true ->
+        Map.update!(old_stats, location, &(&1 + 1))
+      false ->
+        Map.put_new(old_stats, location, 1)
+    end
   end
 end
